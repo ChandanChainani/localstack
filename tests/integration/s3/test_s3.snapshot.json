@@ -250,5 +250,30 @@
         }
       }
     }
+  },
+  "tests/integration/s3/test_s3.py::TestS3::test_put_and_get_object_with_hash_prefix": {
+    "recorded-date": "26-07-2022, 15:37:04",
+    "recorded-content": {
+      "put-object": {
+        "ResponseMetadata": {
+          "HTTPHeaders": {},
+          "HTTPStatusCode": 200
+        },
+        "ETag": "\"39d0d586a701e199389d954f2d592720\""
+      },
+      "get-object": {
+        "ResponseMetadata": {
+          "HTTPHeaders": {},
+          "HTTPStatusCode": 200
+        },
+        "AcceptRanges": "bytes",
+        "LastModified": "datetime",
+        "ContentLength": 8,
+        "ETag": "\"39d0d586a701e199389d954f2d592720\"",
+        "ContentType": "binary/octet-stream",
+        "Metadata": {},
+        "Body": ""
+      }
+    }
   }
 }

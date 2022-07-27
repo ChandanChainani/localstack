@@ -162,51 +162,6 @@ class TestS3(unittest.TestCase):
         ]
         self.assertEqual(policy, json.loads(saved_policy))
 
-    def test_invalid_range_error(self):
-        bucket_name = "range-%s" % short_uid()
-        self.s3_client.create_bucket(Bucket=bucket_name)
-
-        self.s3_client.create_bucket(Bucket=bucket_name)
-        self.s3_client.put_object(Bucket=bucket_name, Key="steve", Body=b"is awesome")
-
-        try:
-            self.s3_client.get_object(Bucket=bucket_name, Key="steve", Range="bytes=1024-4096")
-        except ClientError as e:
-            self.assertEqual("InvalidRange", e.response["Error"]["Code"])
-
-        # clean up
-        self._delete_bucket(bucket_name, ["steve"])
-
-    def test_range_key_not_exists(self):
-        bucket_name = "range-%s" % short_uid()
-        self.s3_client.create_bucket(Bucket=bucket_name)
-
-        self.s3_client.create_bucket(Bucket=bucket_name)
-        with self.assertRaises(ClientError) as ctx:
-            self.s3_client.get_object(Bucket=bucket_name, Key="key", Range="bytes=1024-4096")
-
-        self.assertIn("NoSuchKey", str(ctx.exception))
-
-        # clean up
-        self._delete_bucket(bucket_name)
-
-    def test_upload_key_with_hash_prefix(self):
-        bucket_name = "hash-%s" % short_uid()
-        self.s3_client.create_bucket(Bucket=bucket_name)
-
-        key_name = "#key-with-hash-prefix"
-        content = b"test 123"
-        self.s3_client.put_object(Bucket=bucket_name, Key=key_name, Body=content)
-
-        downloaded_object = self.s3_client.get_object(Bucket=bucket_name, Key=key_name)
-        downloaded_content = to_str(downloaded_object["Body"].read())
-        self.assertEqual(to_str(content), to_str(downloaded_content))
-
-        # clean up
-        self._delete_bucket(bucket_name, [key_name])
-        with self.assertRaises(Exception):
-            self.s3_client.head_object(Bucket=bucket_name, Key=key_name)
-
     def test_s3_multipart_upload_acls(self):
         bucket_name = "test-bucket-%s" % short_uid()
         self.s3_client.create_bucket(Bucket=bucket_name, ACL="public-read")

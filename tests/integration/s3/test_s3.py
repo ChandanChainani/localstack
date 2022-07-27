@@ -196,6 +196,41 @@ class TestS3:
         )
         assert response["ObjectSize"] == 7
 
+    @pytest.mark.aws_validated
+    @pytest.mark.skip_snapshot_verify(paths=["$..VersionId", "$..ContentLanguage"])
+    def test_put_and_get_object_with_hash_prefix(self, s3_client, s3_bucket, snapshot):
+        snapshot.add_transformer(snapshot.transform.s3_api())
+        key_name = "#key-with-hash-prefix"
+        content = b"test 123"
+        response = s3_client.put_object(Bucket=s3_bucket, Key=key_name, Body=content)
+        assert response["ResponseMetadata"]["HTTPStatusCode"] == 200
+        snapshot.match("put-object", response)
+
+        response = s3_client.get_object(Bucket=s3_bucket, Key=key_name)
+        snapshot.match("get-object", response)
+        assert response["Body"].read() == content
+
+    @pytest.mark.aws_validated
+    @pytest.mark.xfail(reason="error message is different in current implementation")
+    def test_invalid_range_error(self, s3_client, s3_bucket):
+        key = "my-key"
+        s3_client.put_object(Bucket=s3_bucket, Key=key, Body=b"abcdefgh")
+
+        with pytest.raises(ClientError) as e:
+            s3_client.get_object(Bucket=s3_bucket, Key=key, Range="bytes=1024-4096")
+
+        e.match("InvalidRange")
+        e.match("The requested range is not satisfiable")
+
+    @pytest.mark.aws_validated
+    def test_range_key_not_exists(self, s3_client, s3_bucket):
+        key = "my-key"
+        with pytest.raises(ClientError) as e:
+            s3_client.get_object(Bucket=s3_bucket, Key=key, Range="bytes=1024-4096")
+
+        e.match("NoSuchKey")
+        e.match("The specified key does not exist.")
+
 
 class TestS3PresignedUrl:
     """
