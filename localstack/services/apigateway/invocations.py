@@ -23,10 +23,12 @@ from localstack.services.apigateway.helpers import (
 from localstack.services.apigateway.integration import (
     LambdaProxyIntegration,
     MockIntegration,
-    RequestTemplates,
-    ResponseTemplates,
     SnsIntegration,
     StepFunctionIntegration,
+)
+from localstack.services.apigateway.templates import (
+    RequestTemplates,
+    ResponseTemplates,
     VtlTemplate,
 )
 from localstack.services.awslambda import lambda_api
