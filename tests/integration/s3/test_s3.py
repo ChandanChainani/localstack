@@ -1,3 +1,4 @@
+import json
 import time
 
 import pytest
@@ -230,6 +231,45 @@ class TestS3:
 
         e.match("NoSuchKey")
         e.match("The specified key does not exist.")
+
+    @pytest.mark.aws_validated
+    def test_create_bucket_via_host_name(self, s3_vhost_client):
+        # todo check redirection (happens in AWS because of region name), should it happen in LS?
+        # https://docs.aws.amazon.com/AmazonS3/latest/userguide/VirtualHosting.html#VirtualHostingBackwardsCompatibility
+        bucket_name = "test-%s" % short_uid()
+        try:
+            response = s3_vhost_client.create_bucket(
+                Bucket=bucket_name,
+                CreateBucketConfiguration={"LocationConstraint": "eu-central-1"},
+            )
+            assert "Location" in response
+            assert response["ResponseMetadata"]["HTTPStatusCode"] == 200
+            response = s3_vhost_client.get_bucket_location(Bucket=bucket_name)
+            assert response["ResponseMetadata"]["HTTPStatusCode"] == 200
+            assert response["LocationConstraint"] == "eu-central-1"
+        finally:
+            s3_vhost_client.delete_bucket(Bucket=bucket_name)
+
+    @pytest.mark.aws_validated
+    def test_put_and_get_bucket_policy(self, s3_client, s3_bucket):
+        # put bucket policy
+        policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Action": "s3:GetObject",
+                    "Effect": "Allow",
+                    "Resource": f"arn:aws:s3:::{s3_bucket}/*",
+                    "Principal": {"AWS": "*"},
+                }
+            ],
+        }
+        response = s3_client.put_bucket_policy(Bucket=s3_bucket, Policy=json.dumps(policy))
+        assert response["ResponseMetadata"]["HTTPStatusCode"] == 204
+
+        # retrieve and check policy config
+        saved_policy = s3_client.get_bucket_policy(Bucket=s3_bucket)["Policy"]
+        assert policy == json.loads(saved_policy)
 
 
 class TestS3PresignedUrl:
