@@ -51,6 +51,7 @@ from localstack.aws.api.sqs import (
     QueueAttributeName,
     QueueDeletedRecently,
     QueueDoesNotExist,
+    QueueNameExists,
     ReceiptHandleIsInvalid,
     ReceiveMessageResult,
     SendMessageBatchRequestEntryList,
@@ -90,6 +91,19 @@ DEDUPLICATION_INTERVAL_IN_SEC = 5 * 60
 # When you delete a queue, you must wait at least 60 seconds before creating a queue with the same name.
 # see https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_DeleteQueue.html
 RECENTLY_DELETED_TIMEOUT = 60
+
+INTERNAL_QUEUE_ATTRIBUTES = [
+    # these attributes cannot be changed by set_queue_attributes and should
+    # therefore be ignored when comparing queue attributes for create_queue
+    # 'FifoQueue' is handled on a per_queue basis
+    QueueAttributeName.ApproximateNumberOfMessages,
+    QueueAttributeName.ApproximateNumberOfMessagesDelayed,
+    QueueAttributeName.ApproximateNumberOfMessagesNotVisible,
+    QueueAttributeName.ContentBasedDeduplication,
+    QueueAttributeName.CreatedTimestamp,
+    QueueAttributeName.LastModifiedTimestamp,
+    QueueAttributeName.QueueArn,
+]
 
 
 class InvalidParameterValue(CommonServiceException):
@@ -550,12 +564,16 @@ class SqsQueue:
             )
 
     def validate_queue_attributes(self, attributes):
-        valid = [k[1] for k in inspect.getmembers(QueueAttributeName)]
+        valid = [
+            k[1]
+            for k in inspect.getmembers(QueueAttributeName)
+            if k not in INTERNAL_QUEUE_ATTRIBUTES
+        ]
         del valid[valid.index(QueueAttributeName.FifoQueue)]
 
         for k in attributes.keys():
             if k not in valid:
-                raise InvalidAttributeName(f"Unknown Attribute {k}")
+                raise InvalidAttributeName(f"Unknown Attribute {k}.")
 
     def generate_sequence_number(self):
         return None
@@ -601,7 +619,6 @@ class StandardQueue(SqsQueue):
 
 
 class FifoQueue(SqsQueue):
-
     deduplication: Dict[str, Dict[str, SqsMessage]]
 
     def __init__(self, name: str, region: str, account_id: str, attributes=None, tags=None) -> None:
@@ -692,11 +709,14 @@ class FifoQueue(SqsQueue):
         super()._assert_queue_name(queue_name)
 
     def validate_queue_attributes(self, attributes):
-        valid = [k[1] for k in inspect.getmembers(QueueAttributeName)]
-
+        valid = [
+            k[1]
+            for k in inspect.getmembers(QueueAttributeName)
+            if k not in INTERNAL_QUEUE_ATTRIBUTES
+        ]
         for k in attributes.keys():
             if k not in valid:
-                raise InvalidAttributeName(f"Unknown Attribute {k}")
+                raise InvalidAttributeName(f"Unknown Attribute {k}.")
         # Special Cases
         fifo = attributes.get(QueueAttributeName.FifoQueue)
         if fifo and fifo.lower() != "true":
@@ -919,8 +939,24 @@ class SqsProvider(SqsApi, ServiceLifecycleHook):
 
         with self._mutex:
             if queue_name in backend.queues:
-                # FIXME #5938: should raise `QueueNameExists` if queue exists with different attributes
                 queue = backend.queues[queue_name]
+
+                if attributes:
+                    # if attributes are set, then we check whether the existing attributes match the passed ones
+                    queue.validate_queue_attributes(attributes)
+                    for k, v in attributes.items():
+                        if queue.attributes.get(k) != v:
+                            LOG.debug(
+                                "queue attribute values %s for queue %s do not match %s (existing) != %s (new)",
+                                k,
+                                queue_name,
+                                queue.attributes.get(k),
+                                v,
+                            )
+                            raise QueueNameExists(
+                                f"A queue already exists with the same name and a different value for attribute {k}"
+                            )
+
                 return CreateQueueResult(QueueUrl=queue.url(context))
 
             if config.SQS_DELAY_RECENTLY_DELETED:
@@ -1357,6 +1393,8 @@ class SqsProvider(SqsApi, ServiceLifecycleHook):
         queue.validate_queue_attributes(attributes)
 
         for k, v in attributes.items():
+            if k in INTERNAL_QUEUE_ATTRIBUTES:
+                raise InvalidAttributeName(f"Unknown Attribute {k}.")
             queue.attributes[k] = v
 
         # Special cases
@@ -1444,13 +1482,6 @@ class SqsProvider(SqsApi, ServiceLifecycleHook):
                 result[attr] = message_system_attributes[attr]["StringValue"]
 
         return result
-
-    def _validate_queue_attributes(self, attributes: QueueAttributeMap):
-        valid = [k[1] for k in inspect.getmembers(QueueAttributeName)]
-
-        for k in attributes.keys():
-            if k not in valid:
-                raise InvalidAttributeName("Unknown Attribute %s" % k)
 
     def _validate_actions(self, actions: ActionNameList):
         service = load_service(service=self.service, version=self.version)

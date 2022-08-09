@@ -25,7 +25,6 @@ from localstack.services.awslambda.lambda_utils import (
     LAMBDA_RUNTIME_PROVIDED,
     get_container_network_for_lambda,
     get_main_endpoint_from_container,
-    get_record_from_event,
     is_java_lambda,
     is_nodejs_runtime,
     rm_docker_container,
@@ -34,10 +33,7 @@ from localstack.services.awslambda.lambda_utils import (
 from localstack.services.install import GO_LAMBDA_RUNTIME, INSTALL_PATH_LOCALSTACK_FAT_JAR
 from localstack.utils.aws import aws_stack
 from localstack.utils.aws.aws_models import LambdaFunction
-from localstack.utils.aws.dead_letter_queue import (
-    lambda_error_to_dead_letter_queue,
-    sqs_error_to_dead_letter_queue,
-)
+from localstack.utils.aws.dead_letter_queue import lambda_error_to_dead_letter_queue
 from localstack.utils.cloudwatch.cloudwatch_util import cloudwatched
 from localstack.utils.collections import select_attributes
 from localstack.utils.common import (
@@ -354,14 +350,7 @@ def handle_error(
     lambda_function: LambdaFunction, event: Dict, error: Exception, asynchronous: bool = False
 ):
     if asynchronous:
-        if get_record_from_event(event, "eventSource") == EVENT_SOURCE_SQS:
-            sqs_queue_arn = get_record_from_event(event, "eventSourceARN")
-            if sqs_queue_arn:
-                # event source is SQS, send event back to dead letter queue
-                return sqs_error_to_dead_letter_queue(sqs_queue_arn, event, error)
-        else:
-            # event source is not SQS, send back to lambda dead letter queue
-            lambda_error_to_dead_letter_queue(lambda_function, event, error)
+        lambda_error_to_dead_letter_queue(lambda_function, event, error)
 
 
 class LambdaAsyncLocks:
@@ -425,7 +414,6 @@ class LambdaExecutor:
                     # start the execution
                     raised_error = None
                     result = None
-                    dlq_sent = None
                     invocation_type = "Event" if asynchronous else "RequestResponse"
                     inv_context = InvocationContext(
                         lambda_function,
@@ -438,13 +426,13 @@ class LambdaExecutor:
                         result = self._execute(lambda_function, inv_context)
                     except Exception as e:
                         raised_error = e
-                        dlq_sent = handle_error(lambda_function, event, e, asynchronous)
+                        handle_error(lambda_function, event, e, asynchronous)
                         raise e
                     finally:
                         self.function_invoke_times[func_arn] = invocation_time
-                        callback and callback(
-                            result, func_arn, event, error=raised_error, dlq_sent=dlq_sent
-                        )
+                        if callback:
+                            callback(result, func_arn, event, error=raised_error)
+
                         lambda_result_to_destination(
                             lambda_function, event, result, asynchronous, raised_error
                         )
@@ -1461,7 +1449,7 @@ class LambdaExecutorLocal(LambdaExecutor):
 
         classpath = "%s:%s:%s" % (
             main_file,
-            Util.get_java_classpath(main_file),
+            Util.get_java_classpath(lambda_function.cwd),
             LAMBDA_EXECUTOR_JAR,
         )
         cmd = "java %s -cp %s %s %s" % (
@@ -1640,27 +1628,25 @@ class Util:
         return "%s:%s" % (docker_image, docker_tag)
 
     @classmethod
-    def get_java_classpath(cls, archive):
+    def get_java_classpath(cls, lambda_cwd):
         """
-        Return the Java classpath, using the parent folder of the
-        given archive as the base folder.
+        Return the Java classpath, using the given working directory as the base folder.
 
-        The result contains any *.jar files in the base folder, as
+        The result contains any *.jar files in the workdir folder, as
         well as any JAR files in the "lib/*" subfolder living
         alongside the supplied java archive (.jar or .zip).
 
-        :param archive: an absolute path to a .jar or .zip Java archive
-        :return: the Java classpath, relative to the base dir of "archive"
+        :param lambda_cwd: an absolute path to a working directory folder of a java lambda
+        :return: the Java classpath, relative to the base dir of the working directory
         """
         entries = ["."]
-        base_dir = os.path.dirname(archive)
         for pattern in ["%s/*.jar", "%s/lib/*.jar", "%s/java/lib/*.jar", "%s/*.zip"]:
-            for entry in glob.glob(pattern % base_dir):
-                if os.path.realpath(archive) != os.path.realpath(entry):
-                    entries.append(os.path.relpath(entry, base_dir))
+            for entry in glob.glob(pattern % lambda_cwd):
+                if os.path.realpath(lambda_cwd) != os.path.realpath(entry):
+                    entries.append(os.path.relpath(entry, lambda_cwd))
         # make sure to append the localstack-utils.jar at the end of the classpath
         # https://github.com/localstack/localstack/issues/1160
-        entries.append(os.path.relpath(archive, base_dir))
+        entries.append(os.path.relpath(lambda_cwd, lambda_cwd))
         entries.append("*.jar")
         entries.append("java/lib/*.jar")
         result = ":".join(entries)
