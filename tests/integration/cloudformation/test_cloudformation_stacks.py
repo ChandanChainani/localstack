@@ -193,3 +193,25 @@ Resources:
     deployed = deploy_cfn_template(template=template)
     response = cfn_client.describe_stacks(StackName=deployed.stack_id)["Stacks"][0]
     snapshot.match("describe_stack", response)
+
+
+@pytest.mark.aws_validated
+@pytest.mark.parametrize("fileformat", ["yaml", "json"])
+def test_get_template(cfn_client, deploy_cfn_template, snapshot, fileformat):
+    snapshot.add_transformer(snapshot.transform.cloudformation_api())
+    stack = deploy_cfn_template(
+        template_path=os.path.join(
+            os.path.dirname(__file__), f"../templates/sns_topic_template.{fileformat}"
+        )
+    )
+
+    describe_stacks = cfn_client.describe_stacks(StackName=stack.stack_id)
+    snapshot.match("describe_stacks", describe_stacks)
+
+    template_original = cfn_client.get_template(StackName=stack.stack_id, TemplateStage="Original")
+    snapshot.match("template_original", template_original)
+
+    template_processed = cfn_client.get_template(
+        StackName=stack.stack_id, TemplateStage="Processed"
+    )
+    snapshot.match("template_processed", template_processed)
